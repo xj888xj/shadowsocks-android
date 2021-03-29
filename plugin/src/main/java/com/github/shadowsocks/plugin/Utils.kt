@@ -25,7 +25,7 @@ package com.github.shadowsocks.plugin
 import android.os.Parcelable
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.FragmentManager
-import kotlinx.parcelize.Parcelize
+import kotlinx.android.parcel.Parcelize
 
 @Parcelize
 class Empty : Parcelable

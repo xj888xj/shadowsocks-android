@@ -31,7 +31,6 @@ import org.json.JSONArray
 import timber.log.Timber
 import java.io.IOException
 import java.io.InputStream
-import java.io.Serializable
 import java.sql.SQLException
 
 /**
@@ -47,14 +46,6 @@ object ProfileManager {
     }
     var listener: Listener? = null
 
-    data class ExpandedProfile(val main: Profile, val udpFallback: Profile?) : Serializable {
-        companion object {
-            private const val serialVersionUID = 1L
-        }
-
-        fun toList() = listOfNotNull(main, udpFallback)
-    }
-
     @Throws(SQLException::class)
     fun createProfile(profile: Profile = Profile()): Profile {
         profile.id = 0
@@ -68,7 +59,7 @@ object ProfileManager {
         val profiles = if (replace) getAllProfiles()?.associateBy { it.formattedAddress } else null
         val feature = if (replace) {
             profiles?.values?.singleOrNull { it.id == DataStore.profileId }
-        } else Core.currentProfile?.main
+        } else Core.currentProfile?.first
         val lazyClear = lazy { clear() }
         jsons.asIterable().forEachTry { json ->
             Profile.parseJson(JsonStreamParser(json.bufferedReader()).asSequence().single(), feature) {
@@ -108,7 +99,7 @@ object ProfileManager {
     }
 
     @Throws(IOException::class)
-    fun expand(profile: Profile) = ExpandedProfile(profile, profile.udpFallback?.let { getProfile(it) })
+    fun expand(profile: Profile): Pair<Profile, Profile?> = Pair(profile, profile.udpFallback?.let { getProfile(it) })
 
     @Throws(SQLException::class)
     fun delProfile(id: Long) {

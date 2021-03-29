@@ -29,7 +29,6 @@ import android.net.Network
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
-import android.system.Os
 import android.system.OsConstants
 import com.github.shadowsocks.Core
 import com.github.shadowsocks.VpnRequestActivity
@@ -41,6 +40,7 @@ import com.github.shadowsocks.net.DnsResolverCompat
 import com.github.shadowsocks.net.Subnet
 import com.github.shadowsocks.preference.DataStore
 import com.github.shadowsocks.utils.Key
+import com.github.shadowsocks.utils.closeQuietly
 import com.github.shadowsocks.utils.int
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -59,39 +59,34 @@ class VpnService : BaseVpnService(), BaseService.Interface {
         private const val PRIVATE_VLAN4_ROUTER = "172.19.0.2"
         private const val PRIVATE_VLAN6_CLIENT = "fdfe:dcba:9876::1"
         private const val PRIVATE_VLAN6_ROUTER = "fdfe:dcba:9876::2"
-
-        private fun <T> FileDescriptor.use(block: (FileDescriptor) -> T) = try {
-            block(this)
-        } finally {
-            try {
-                Os.close(this)
-            } catch (_: ErrnoException) { }
-        }
     }
 
     private inner class ProtectWorker : ConcurrentLocalSocketListener("ShadowsocksVpnThread",
             File(Core.deviceStorage.noBackupFilesDir, "protect_path")) {
         override fun acceptInternal(socket: LocalSocket) {
-            if (socket.inputStream.read() == -1) return
-            val success = socket.ancillaryFileDescriptors!!.single()!!.use { fd ->
-                underlyingNetwork.let { network ->
-                    if (network != null) try {
-                        network.bindSocket(fd)
-                        return@let true
-                    } catch (e: IOException) {
-                        when ((e.cause as? ErrnoException)?.errno) {
-                            // also suppress ENONET (Machine is not on the network)
-                            OsConstants.EPERM, OsConstants.EACCES, 64 -> Timber.d(e)
-                            else -> Timber.w(e)
-                        }
-                        return@let false
-                    }
-                    protect(fd.int)
-                }
-            }
+            socket.inputStream.read()
+            val fd = socket.ancillaryFileDescriptors!!.single()!!
             try {
-                socket.outputStream.write(if (success) 0 else 1)
-            } catch (_: IOException) { }        // ignore connection early close
+                socket.outputStream.write(if (underlyingNetwork.let { network ->
+                            if (network != null) try {
+                                DnsResolverCompat.bindSocket(network, fd)
+                                return@let true
+                            } catch (e: IOException) {
+                                when ((e.cause as? ErrnoException)?.errno) {
+                                    // also suppress ENONET (Machine is not on the network)
+                                    OsConstants.EPERM, 64 -> Timber.d(e)
+                                    else -> Timber.w(e)
+                                }
+                                return@let false
+                            } catch (e: ReflectiveOperationException) {
+                                check(Build.VERSION.SDK_INT < 23)
+                                Timber.w(e)
+                            }
+                            protect(fd.int)
+                        }) 0 else 1)
+            } finally {
+                fd.closeQuietly()
+            }
         }
     }
 
@@ -111,7 +106,7 @@ class VpnService : BaseVpnService(), BaseService.Interface {
     private var underlyingNetwork: Network? = null
         set(value) {
             field = value
-            if (active) setUnderlyingNetworks(underlyingNetworks)
+            if (active && Build.VERSION.SDK_INT >= 22) setUnderlyingNetworks(underlyingNetworks)
         }
     private val underlyingNetworks get() =
         // clearing underlyingNetworks makes Android 9 consider the network to be metered
@@ -204,8 +199,10 @@ class VpnService : BaseVpnService(), BaseService.Interface {
 
         metered = profile.metered
         active = true   // possible race condition here?
-        builder.setUnderlyingNetworks(underlyingNetworks)
-        if (Build.VERSION.SDK_INT >= 29) builder.setMetered(metered)
+        if (Build.VERSION.SDK_INT >= 22) {
+            builder.setUnderlyingNetworks(underlyingNetworks)
+            if (Build.VERSION.SDK_INT >= 29) builder.setMetered(metered)
+        }
 
         val conn = builder.establish() ?: throw NullConnectionException()
         this.conn = conn

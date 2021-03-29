@@ -20,15 +20,19 @@
 
 package com.github.shadowsocks.tv
 
+import android.app.Activity
+import android.app.backup.BackupManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
+import android.os.Handler
 import android.os.RemoteException
 import android.text.format.Formatter
 import android.widget.Toast
-import androidx.activity.result.ActivityResultLauncher
 import androidx.fragment.app.viewModels
 import androidx.leanback.preference.LeanbackPreferenceFragmentCompat
+import androidx.lifecycle.observe
 import androidx.preference.*
 import com.github.shadowsocks.BootReceiver
 import com.github.shadowsocks.Core
@@ -41,12 +45,20 @@ import com.github.shadowsocks.net.HttpsTest
 import com.github.shadowsocks.preference.DataStore
 import com.github.shadowsocks.preference.EditTextPreferenceModifiers
 import com.github.shadowsocks.preference.OnPreferenceDataStoreChangeListener
-import com.github.shadowsocks.utils.*
+import com.github.shadowsocks.utils.Key
+import com.github.shadowsocks.utils.datas
+import com.github.shadowsocks.utils.readableMessage
 import com.google.android.gms.oss.licenses.OssLicensesMenuActivity
 import timber.log.Timber
 
 class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksConnection.Callback,
         OnPreferenceDataStoreChangeListener {
+    companion object {
+        private const val REQUEST_CONNECT = 1
+        private const val REQUEST_REPLACE_PROFILES = 2
+        private const val REQUEST_EXPORT_PROFILES = 3
+    }
+
     private lateinit var fab: ListPreference
     private lateinit var stats: Preference
     private lateinit var controlImport: Preference
@@ -105,7 +117,8 @@ class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksCo
         }
     }
 
-    private val connection = ShadowsocksConnection(true)
+    private val handler = Handler()
+    private val connection = ShadowsocksConnection(handler, true)
     override fun onServiceConnected(service: IShadowsocksService) = changeState(try {
         BaseService.State.values()[service.state]
     } catch (_: RemoteException) {
@@ -166,12 +179,20 @@ class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksCo
     }
 
     fun startService() {
-        if (state == BaseService.State.Stopped) connect.launch(null)
+        when {
+            state != BaseService.State.Stopped -> return
+            DataStore.serviceMode == Key.modeVpn -> {
+                val intent = VpnService.prepare(requireContext())
+                if (intent != null) startActivityForResult(intent, REQUEST_CONNECT)
+                else onActivityResult(REQUEST_CONNECT, Activity.RESULT_OK, null)
+            }
+            else -> Core.startService()
+        }
     }
 
     override fun onPreferenceDataStoreChanged(store: PreferenceDataStore, key: String) {
         when (key) {
-            Key.serviceMode -> {
+            Key.serviceMode -> handler.post {
                 connection.disconnect(requireContext())
                 connection.connect(requireContext(), this)
             }
@@ -193,11 +214,18 @@ class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksCo
             true
         }
         Key.controlImport -> {
-            startFilesForResult(replaceProfiles)
+            startFilesForResult(Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "application/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/*", "text/*"))
+            }, REQUEST_REPLACE_PROFILES)
             true
         }
         Key.controlExport -> {
-            startFilesForResult(exportProfiles)
+            startFilesForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "profiles.json")   // optional title that can be edited
+            }, REQUEST_EXPORT_PROFILES)
             true
         }
         Key.about -> {
@@ -211,42 +239,48 @@ class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksCo
         else -> super.onPreferenceTreeClick(preference)
     }
 
-    private fun startFilesForResult(launcher: ActivityResultLauncher<String>) {
+    private fun startFilesForResult(intent: Intent, requestCode: Int): Boolean {
         try {
-            return launcher.launch("")
-        } catch (_: ActivityNotFoundException) {
-        } catch (_: SecurityException) {
-        }
+            startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), requestCode)
+            return false
+        } catch (_: ActivityNotFoundException) { } catch (_: SecurityException) { }
         Toast.makeText(requireContext(), R.string.file_manager_missing, Toast.LENGTH_SHORT).show()
+        return true
     }
 
-    private val connect = registerForActivityResult(StartService()) {
-        if (it) Toast.makeText(requireContext(), R.string.vpn_permission_denied, Toast.LENGTH_SHORT).show()
-    }
-    private val replaceProfiles = registerForActivityResult(OpenJson()) { dataUris ->
-        if (dataUris.isEmpty()) return@registerForActivityResult
-        val context = requireContext()
-        try {
-            ProfileManager.createProfilesFromJson(dataUris.asSequence().map {
-                context.contentResolver.openInputStream(it)
-            }.filterNotNull(), true)
-        } catch (e: Exception) {
-            Timber.w(e)
-            Toast.makeText(context, e.readableMessage, Toast.LENGTH_SHORT).show()
-        }
-        populateProfiles()
-    }
-    private val exportProfiles = registerForActivityResult(SaveJson()) { data ->
-        if (data != null) ProfileManager.serializeToJson()?.let { profiles ->
-            val context = requireContext()
-            try {
-                context.contentResolver.openOutputStream(data)!!.bufferedWriter().use {
-                    it.write(profiles.toString(2))
-                }
-            } catch (e: Exception) {
-                Timber.w(e)
-                Toast.makeText(context, e.readableMessage, Toast.LENGTH_SHORT).show()
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        when (requestCode) {
+            REQUEST_CONNECT -> if (resultCode == Activity.RESULT_OK) Core.startService() else {
+                Toast.makeText(requireContext(), R.string.vpn_permission_denied, Toast.LENGTH_SHORT).show()
+                Timber.e("Failed to start VpnService from onActivityResult: $data")
             }
+            REQUEST_REPLACE_PROFILES -> {
+                if (resultCode != Activity.RESULT_OK) return
+                val context = requireContext()
+                try {
+                    ProfileManager.createProfilesFromJson(data!!.datas.asSequence().map {
+                        context.contentResolver.openInputStream(it)
+                    }.filterNotNull(), true)
+                } catch (e: Exception) {
+                    Timber.w(e)
+                    Toast.makeText(context, e.readableMessage, Toast.LENGTH_SHORT).show()
+                }
+                populateProfiles()
+            }
+            REQUEST_EXPORT_PROFILES -> {
+                if (resultCode != Activity.RESULT_OK) return
+                val profiles = ProfileManager.serializeToJson()
+                val context = requireContext()
+                if (profiles != null) try {
+                    context.contentResolver.openOutputStream(data?.data!!)!!.bufferedWriter().use {
+                        it.write(profiles.toString(2))
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e)
+                    Toast.makeText(context, e.readableMessage, Toast.LENGTH_SHORT).show()
+                }
+            }
+            else -> super.onActivityResult(requestCode, resultCode, data)
         }
     }
 
@@ -255,5 +289,6 @@ class MainPreferenceFragment : LeanbackPreferenceFragmentCompat(), ShadowsocksCo
         DataStore.publicStore.unregisterChangeListener(this)
         val context = requireContext()
         connection.disconnect(context)
+        BackupManager(context).dataChanged()
     }
 }

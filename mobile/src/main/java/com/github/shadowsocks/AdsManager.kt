@@ -1,7 +1,7 @@
 /*******************************************************************************
  *                                                                             *
- *  Copyright (C) 2017 by Max Lv <max.c.lv@gmail.com>                          *
- *  Copyright (C) 2017 by Mygod Studio <contact-shadowsocks-android@mygod.be>  *
+ *  Copyright (C) 2020 by Max Lv <max.c.lv@gmail.com>                          *
+ *  Copyright (C) 2020 by Mygod Studio <contact-shadowsocks-android@mygod.be>  *
  *                                                                             *
  *  This program is free software: you can redistribute it and/or modify       *
  *  it under the terms of the GNU General Public License as published by       *
@@ -20,24 +20,22 @@
 
 package com.github.shadowsocks
 
-import android.os.Bundle
-import android.view.View
-import androidx.appcompat.widget.Toolbar
-import androidx.core.view.GravityCompat
-import androidx.fragment.app.Fragment
+import android.content.Context
+import com.google.android.gms.ads.AdLoader
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.MobileAds
+import com.google.android.gms.ads.RequestConfiguration
 
-/**
- * @author Mygod
- */
-open class ToolbarFragment : Fragment() {
-    lateinit var toolbar: Toolbar
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        toolbar = view.findViewById(R.id.toolbar)
-        toolbar.setNavigationIcon(R.drawable.ic_navigation_menu)
-        toolbar.setNavigationOnClickListener { (activity as MainActivity).drawer.openDrawer(GravityCompat.START) }
+internal object AdsManager {
+    init {
+        MobileAds.setRequestConfiguration(RequestConfiguration.Builder().apply {
+            setTestDeviceIds(listOf(
+                    "B08FC1764A7B250E91EA9D0D5EBEB208", "7509D18EB8AF82F915874FEF53877A64",
+                    "F58907F28184A828DD0DB6F8E38189C6", "FE983F496D7C5C1878AA163D9420CA97"))
+        }.build())
     }
 
-    open fun onBackPressed(): Boolean = false
+    fun load(context: Context?, setup: AdLoader.Builder.() -> Unit) =
+            AdLoader.Builder(context, "ca-app-pub-3283768469187309/8632513739").apply(setup).build()
+                    .loadAd(AdRequest.Builder().build())
 }

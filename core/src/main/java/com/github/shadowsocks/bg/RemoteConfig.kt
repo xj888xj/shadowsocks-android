@@ -1,7 +1,7 @@
 /*******************************************************************************
  *                                                                             *
- *  Copyright (C) 2017 by Max Lv <max.c.lv@gmail.com>                          *
- *  Copyright (C) 2017 by Mygod Studio <contact-shadowsocks-android@mygod.be>  *
+ *  Copyright (C) 2018 by Max Lv <max.c.lv@gmail.com>                          *
+ *  Copyright (C) 2018 by Mygod Studio <contact-shadowsocks-android@mygod.be>  *
  *                                                                             *
  *  This program is free software: you can redistribute it and/or modify       *
  *  it under the terms of the GNU General Public License as published by       *
@@ -18,26 +18,34 @@
  *                                                                             *
  *******************************************************************************/
 
-package com.github.shadowsocks
+package com.github.shadowsocks.bg
 
-import android.os.Bundle
-import android.view.View
-import androidx.appcompat.widget.Toolbar
-import androidx.core.view.GravityCompat
-import androidx.fragment.app.Fragment
+import com.github.shadowsocks.core.R
+import com.google.firebase.analytics.ktx.analytics
+import com.google.firebase.analytics.ktx.logEvent
+import com.google.firebase.ktx.Firebase
+import com.google.firebase.remoteconfig.ktx.remoteConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.tasks.await
+import timber.log.Timber
 
-/**
- * @author Mygod
- */
-open class ToolbarFragment : Fragment() {
-    lateinit var toolbar: Toolbar
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        toolbar = view.findViewById(R.id.toolbar)
-        toolbar.setNavigationIcon(R.drawable.ic_navigation_menu)
-        toolbar.setNavigationOnClickListener { (activity as MainActivity).drawer.openDrawer(GravityCompat.START) }
+object RemoteConfig {
+    private val config = GlobalScope.async(Dispatchers.Main.immediate) {
+        Firebase.remoteConfig.apply { setDefaultsAsync(R.xml.default_configs).await() }
     }
 
-    open fun onBackPressed(): Boolean = false
+    fun fetchAsync() = GlobalScope.async(Dispatchers.Main.immediate) { fetch() }
+
+    suspend fun fetch() = config.await().run {
+        try {
+            fetch().await()
+            this to true
+        } catch (e: Exception) {
+            Timber.d(e)
+            Firebase.analytics.logEvent("femote_config_failure") { param("message", e.toString()) }
+            this to false
+        }
+    }
 }

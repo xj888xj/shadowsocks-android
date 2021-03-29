@@ -20,24 +20,12 @@
 
 package com.github.shadowsocks
 
-import android.os.Bundle
-import android.view.View
-import androidx.appcompat.widget.Toolbar
-import androidx.core.view.GravityCompat
-import androidx.fragment.app.Fragment
+import android.app.backup.BackupAgentHelper
+import android.app.backup.FileBackupHelper
+import com.github.shadowsocks.utils.Key
 
-/**
- * @author Mygod
- */
-open class ToolbarFragment : Fragment() {
-    lateinit var toolbar: Toolbar
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        toolbar = view.findViewById(R.id.toolbar)
-        toolbar.setNavigationIcon(R.drawable.ic_navigation_menu)
-        toolbar.setNavigationOnClickListener { (activity as MainActivity).drawer.openDrawer(GravityCompat.START) }
-    }
-
-    open fun onBackPressed(): Boolean = false
+@Deprecated("Only used in API level < 23. For 6.0+, Auto Backup for Apps is used.")
+class ConfigBackupHelper : BackupAgentHelper() {
+    override fun onCreate() = addHelper("com.github.shadowsocks.database.profile", FileBackupHelper(this,
+            "../databases/" + Key.DB_PROFILE, "../databases/" + Key.DB_PUBLIC))
 }

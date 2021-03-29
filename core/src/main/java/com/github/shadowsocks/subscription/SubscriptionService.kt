@@ -95,7 +95,9 @@ class SubscriptionService : Service(), CoroutineScope {
                 }
                 Core.notification.notify(NOTIFICATION_ID, notification.build())
                 counter = 0
-                val workers = urls.asIterable().map { url -> fetchJsonAsync(url, urls.size(), notification) }
+                val workers = urls.asIterable().map { url ->
+                    async(Dispatchers.IO) { fetchJson(url, urls.size(), notification) }
+                }
                 try {
                     val localJsons = workers.awaitAll()
                     withContext(Dispatchers.Main) {
@@ -125,20 +127,20 @@ class SubscriptionService : Service(), CoroutineScope {
         return START_NOT_STICKY
     }
 
-    private fun fetchJsonAsync(url: URL, max: Int, notification: NotificationCompat.Builder) = async(Dispatchers.IO) {
+    private suspend fun fetchJson(url: URL, max: Int, notification: NotificationCompat.Builder): File? {
         val tempFile = File.createTempFile("subscription-", ".json", cacheDir)
         try {
             (url.openConnection() as HttpURLConnection).useCancellable {
                 tempFile.outputStream().use { out -> inputStream.copyTo(out) }
             }
-            tempFile
-        } catch (e: Exception) {
+            return tempFile
+        } catch (e: IOException) {
             Timber.d(e)
             launch(Dispatchers.Main) {
                 Toast.makeText(this@SubscriptionService, e.readableMessage, Toast.LENGTH_LONG).show()
             }
             if (!tempFile.delete()) tempFile.deleteOnExit()
-            null
+            return null
         } finally {
             withContext(Dispatchers.Main) {
                 counter += 1

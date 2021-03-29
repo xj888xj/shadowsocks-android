@@ -24,7 +24,9 @@ import android.os.Build
 import android.os.SystemClock
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
+import com.github.shadowsocks.Core
 import com.github.shadowsocks.Core.app
+import com.github.shadowsocks.acl.Acl
 import com.github.shadowsocks.core.R
 import com.github.shadowsocks.preference.DataStore
 import com.github.shadowsocks.utils.Key
@@ -77,12 +79,15 @@ class HttpsTest : ViewModel() {
     }
 
     private var running: Job? = null
-    val status = MutableLiveData<Status>(Status.Idle)
+    val status = MutableLiveData<Status>().apply { value = Status.Idle }
 
     fun testConnection() {
         cancelTest()
         status.value = Status.Testing
-        val url = URL("https://cp.cloudflare.com")
+        val url = URL("https", when ((Core.currentProfile ?: return).first.route) {
+            Acl.CHINALIST -> "www.qualcomm.cn"
+            else -> "www.google.com"
+        }, "/generate_204")
         val conn = (if (DataStore.serviceMode != Key.modeVpn) {
             url.openConnection(Proxy(Proxy.Type.SOCKS, DataStore.proxyAddress))
         } else url.openConnection()) as HttpURLConnection

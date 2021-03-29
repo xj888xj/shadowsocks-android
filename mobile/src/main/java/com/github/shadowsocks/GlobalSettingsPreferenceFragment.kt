@@ -23,7 +23,6 @@ package com.github.shadowsocks
 import android.os.Build
 import android.os.Bundle
 import android.view.View
-import androidx.core.view.ViewCompat
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -79,7 +78,7 @@ class GlobalSettingsPreferenceFragment : PreferenceFragmentCompat() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        ViewCompat.setOnApplyWindowInsetsListener(listView, MainListListener)
+        listView.setOnApplyWindowInsetsListener(MainListListener)
     }
 
     override fun onDestroy() {

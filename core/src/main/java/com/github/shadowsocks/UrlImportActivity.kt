@@ -32,7 +32,7 @@ import com.github.shadowsocks.database.ProfileManager
 import com.github.shadowsocks.plugin.AlertDialogFragment
 import com.github.shadowsocks.plugin.Empty
 import com.github.shadowsocks.plugin.showAllowingStateLoss
-import kotlinx.parcelize.Parcelize
+import kotlinx.android.parcel.Parcelize
 
 class UrlImportActivity : AppCompatActivity() {
     @Parcelize
@@ -67,7 +67,7 @@ class UrlImportActivity : AppCompatActivity() {
     }
 
     private fun handleShareIntent() = intent.data?.toString()?.let { sharedStr ->
-        val profiles = Profile.findAllUrls(sharedStr, Core.currentProfile?.main).toList()
+        val profiles = Profile.findAllUrls(sharedStr, Core.currentProfile?.first).toList()
         if (profiles.isEmpty()) null else ImportProfilesDialogFragment().withArg(ProfilesArg(profiles))
     }
 }

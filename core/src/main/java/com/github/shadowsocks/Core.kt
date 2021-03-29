@@ -37,6 +37,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import androidx.work.Configuration
+import androidx.work.WorkManager
 import com.github.shadowsocks.acl.Acl
 import com.github.shadowsocks.aidl.ShadowsocksConnection
 import com.github.shadowsocks.core.BuildConfig
@@ -61,7 +62,7 @@ import java.io.File
 import java.io.IOException
 import kotlin.reflect.KClass
 
-object Core : Configuration.Provider {
+object Core {
     lateinit var app: Application
         @VisibleForTesting set
     lateinit var configureIntent: (Context) -> PendingIntent
@@ -69,7 +70,6 @@ object Core : Configuration.Provider {
     val clipboard by lazy { app.getSystemService<ClipboardManager>()!! }
     val connectivity by lazy { app.getSystemService<ConnectivityManager>()!! }
     val notification by lazy { app.getSystemService<NotificationManager>()!! }
-    val user by lazy { app.getSystemService<UserManager>()!! }
     val packageInfo: PackageInfo by lazy { getPackageInfo(app.packageName) }
     val deviceStorage by lazy { if (Build.VERSION.SDK_INT < 24) app else DeviceStorageApp(app) }
     val directBootSupported by lazy {
@@ -80,7 +80,7 @@ object Core : Configuration.Provider {
     val activeProfileIds get() = ProfileManager.getProfile(DataStore.profileId).let {
         if (it == null) emptyList() else listOfNotNull(it.id, it.udpFallback)
     }
-    val currentProfile: ProfileManager.ExpandedProfile? get() {
+    val currentProfile: Pair<Profile, Profile?>? get() {
         if (DataStore.directBootAware) DirectBoot.getDeviceProfile()?.apply { return this }
         return ProfileManager.expand(ProfileManager.getProfile(DataStore.profileId) ?: return null)
     }
@@ -121,11 +121,14 @@ object Core : Configuration.Provider {
                 }
             }
         })
+        WorkManager.initialize(deviceStorage, Configuration.Builder().apply {
+            setExecutor { GlobalScope.launch { it.run() } }
+            setTaskExecutor { GlobalScope.launch { it.run() } }
+        }.build())
 
         // handle data restored/crash
-        if (Build.VERSION.SDK_INT >= 24 && DataStore.directBootAware && user.isUserUnlocked) {
-            DirectBoot.flushTrafficStats()
-        }
+        if (Build.VERSION.SDK_INT >= 24 && DataStore.directBootAware &&
+                app.getSystemService<UserManager>()?.isUserUnlocked == true) DirectBoot.flushTrafficStats()
         if (DataStore.publicStore.getLong(Key.assetUpdateTime, -1) != packageInfo.lastUpdateTime) {
             val assetManager = app.assets
             try {
@@ -139,13 +142,6 @@ object Core : Configuration.Provider {
         }
         updateNotificationChannels()
     }
-
-    override fun getWorkManagerConfiguration() = Configuration.Builder().apply {
-        setDefaultProcessName(app.packageName + ":bg")
-        setMinimumLoggingLevel(if (BuildConfig.DEBUG) Log.VERBOSE else Log.INFO)
-        setExecutor { GlobalScope.launch { it.run() } }
-        setTaskExecutor { GlobalScope.launch { it.run() } }
-    }.build()
 
     fun updateNotificationChannels() {
         if (Build.VERSION.SDK_INT >= 26) @RequiresApi(26) {
