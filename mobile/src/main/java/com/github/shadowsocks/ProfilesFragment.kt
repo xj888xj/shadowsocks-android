@@ -21,11 +21,11 @@
 package com.github.shadowsocks
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.text.format.Formatter
 import android.util.LongSparseArray
@@ -33,13 +33,15 @@ import android.view.LayoutInflater
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.widget.*
+import android.widget.ImageView
+import android.widget.TextView
+import androidx.activity.result.ActivityResultLauncher
 import androidx.appcompat.widget.PopupMenu
 import androidx.appcompat.widget.Toolbar
 import androidx.appcompat.widget.TooltipCompat
 import androidx.core.os.bundleOf
+import androidx.core.view.ViewCompat
 import androidx.fragment.app.DialogFragment
-import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.*
 import com.github.shadowsocks.aidl.TrafficStats
 import com.github.shadowsocks.bg.BaseService
@@ -49,21 +51,16 @@ import com.github.shadowsocks.plugin.PluginConfiguration
 import com.github.shadowsocks.plugin.showAllowingStateLoss
 import com.github.shadowsocks.preference.DataStore
 import com.github.shadowsocks.utils.Action
-import com.github.shadowsocks.utils.datas
+import com.github.shadowsocks.utils.OpenJson
+import com.github.shadowsocks.utils.SaveJson
 import com.github.shadowsocks.utils.readableMessage
 import com.github.shadowsocks.widget.ListHolderListener
 import com.github.shadowsocks.widget.MainListListener
 import com.github.shadowsocks.widget.UndoSnackbarManager
-import com.google.android.gms.ads.VideoOptions
-import com.google.android.gms.ads.formats.NativeAdOptions
-import com.google.android.gms.ads.formats.UnifiedNativeAd
-import com.google.android.gms.ads.formats.UnifiedNativeAdView
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.MultiFormatWriter
 import com.google.zxing.WriterException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.nio.charset.StandardCharsets
 
@@ -75,9 +72,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
         var instance: ProfilesFragment? = null
 
         private const val KEY_URL = "com.github.shadowsocks.QRCodeDialog.KEY_URL"
-        private const val REQUEST_IMPORT_PROFILES = 1
-        private const val REQUEST_REPLACE_PROFILES = 3
-        private const val REQUEST_EXPORT_PROFILES = 2
 
         private val iso88591 = StandardCharsets.ISO_8859_1.newEncoder()
     }
@@ -89,32 +83,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
 
     private fun isProfileEditable(id: Long) =
             (activity as MainActivity).state == BaseService.State.Stopped || id !in Core.activeProfileIds
-
-    private var nativeAd: UnifiedNativeAd? = null
-    private var nativeAdView: UnifiedNativeAdView? = null
-    private var adHost: ProfileViewHolder? = null
-    private fun tryBindAd() = lifecycleScope.launchWhenStarted {
-        val fp = layoutManager.findFirstVisibleItemPosition()
-        if (fp < 0) return@launchWhenStarted
-        for (i in object : Iterator<Int> {
-            var first = fp
-            var last = layoutManager.findLastCompletelyVisibleItemPosition()
-            var flipper = false
-            override fun hasNext() = first <= last
-            override fun next(): Int {
-                flipper = !flipper
-                return if (flipper) first++ else last--
-            }
-        }.asSequence().toList().reversed()) {
-            val viewHolder = profilesList.findViewHolderForAdapterPosition(i) as? ProfileViewHolder
-            if (viewHolder?.item?.isSponsored == true) {
-                viewHolder.populateUnifiedNativeAdView(nativeAd!!, nativeAdView!!)
-                // might be in the middle of a layout after scrolling, need to wait
-                withContext(Dispatchers.Main) { profilesAdapter.notifyItemChanged(i) }
-                break
-            }
-        }
-    }
 
     @SuppressLint("ValidFragment")
     class QRCodeDialog() : DialogFragment() {
@@ -158,7 +126,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
         private val traffic = itemView.findViewById<TextView>(R.id.traffic)
         private val edit = itemView.findViewById<View>(R.id.edit)
         private val subscription = itemView.findViewById<View>(R.id.subscription)
-        private val adContainer = itemView.findViewById<LinearLayout>(R.id.ad_container)
 
         init {
             edit.setOnClickListener {
@@ -180,92 +147,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
                 popup.show()
             }
             TooltipCompat.setTooltipText(share, share.contentDescription)
-        }
-
-        fun populateUnifiedNativeAdView(nativeAd: UnifiedNativeAd, adView: UnifiedNativeAdView) {
-            // Set other ad assets.
-            adView.headlineView = adView.findViewById(R.id.ad_headline)
-            adView.bodyView = adView.findViewById(R.id.ad_body)
-            adView.callToActionView = adView.findViewById(R.id.ad_call_to_action)
-            adView.iconView = adView.findViewById(R.id.ad_app_icon)
-            adView.starRatingView = adView.findViewById(R.id.ad_stars)
-            adView.advertiserView = adView.findViewById(R.id.ad_advertiser)
-
-            // The headline and media content are guaranteed to be in every UnifiedNativeAd.
-            (adView.headlineView as TextView).text = nativeAd.headline
-
-            // These assets aren't guaranteed to be in every UnifiedNativeAd, so it's important to
-            // check before trying to display them.
-            if (nativeAd.body == null) {
-                adView.bodyView.visibility = View.INVISIBLE
-            } else {
-                adView.bodyView.visibility = View.VISIBLE
-                (adView.bodyView as TextView).text = nativeAd.body
-            }
-
-            if (nativeAd.callToAction == null) {
-                adView.callToActionView.visibility = View.INVISIBLE
-            } else {
-                adView.callToActionView.visibility = View.VISIBLE
-                (adView.callToActionView as Button).text = nativeAd.callToAction
-            }
-
-            if (nativeAd.icon == null) {
-                adView.iconView.visibility = View.GONE
-            } else {
-                (adView.iconView as ImageView).setImageDrawable(
-                        nativeAd.icon.drawable)
-                adView.iconView.visibility = View.VISIBLE
-            }
-
-            if (nativeAd.starRating == null) {
-                adView.starRatingView.visibility = View.INVISIBLE
-            } else {
-                (adView.starRatingView as RatingBar).rating = nativeAd.starRating!!.toFloat()
-                adView.starRatingView.visibility = View.VISIBLE
-            }
-
-            if (nativeAd.advertiser == null) {
-                adView.advertiserView.visibility = View.INVISIBLE
-            } else {
-                (adView.advertiserView as TextView).text = nativeAd.advertiser
-                adView.advertiserView.visibility = View.VISIBLE
-            }
-
-            // This method tells the Google Mobile Ads SDK that you have finished populating your
-            // native ad view with this native ad.
-            adView.setNativeAd(nativeAd)
-            adContainer.addView(adView)
-            adHost = this
-        }
-
-        fun attach() {
-            if (adHost != null || !item.isSponsored) return
-            if (nativeAdView == null) {
-                nativeAdView = layoutInflater.inflate(R.layout.ad_unified, adContainer, false) as UnifiedNativeAdView
-                AdsManager.load(context) {
-                    forUnifiedNativeAd { unifiedNativeAd ->
-                        // You must call destroy on old ads when you are done with them,
-                        // otherwise you will have a memory leak.
-                        nativeAd?.destroy()
-                        nativeAd = unifiedNativeAd
-                        tryBindAd()
-                    }
-                    withNativeAdOptions(NativeAdOptions.Builder().apply {
-                        setVideoOptions(VideoOptions.Builder().apply {
-                            setStartMuted(true)
-                        }.build())
-                    }.build())
-                }
-            } else if (nativeAd != null) populateUnifiedNativeAdView(nativeAd!!, nativeAdView!!)
-        }
-
-        fun detach() {
-            if (adHost == this) {
-                adHost = null
-                adContainer.removeAllViews()
-                tryBindAd()
-            }
         }
 
         fun bind(item: Profile) {
@@ -325,8 +206,9 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
                 true
             }
             R.id.action_export_clipboard -> {
-                (activity as MainActivity).snackbar().setText(if (Core.trySetPrimaryClip(this.item.toString()))
-                    R.string.action_export_msg else R.string.action_export_err).show()
+                val success = Core.trySetPrimaryClip(this.item.toString())
+                (activity as MainActivity).snackbar().setText(
+                        if (success) R.string.action_export_msg else R.string.action_export_err).show()
                 true
             }
             else -> false
@@ -341,8 +223,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
             setHasStableIds(true)   // see: http://stackoverflow.com/a/32488059/2245107
         }
 
-        override fun onViewAttachedToWindow(holder: ProfileViewHolder) = holder.attach()
-        override fun onViewDetachedFromWindow(holder: ProfileViewHolder) = holder.detach()
         override fun onBindViewHolder(holder: ProfileViewHolder, position: Int) = holder.bind(profiles[position])
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ProfileViewHolder = ProfileViewHolder(
                 LayoutInflater.from(parent.context).inflate(R.layout.layout_profile, parent, false))
@@ -447,13 +327,13 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        view.setOnApplyWindowInsetsListener(ListHolderListener)
+        ViewCompat.setOnApplyWindowInsetsListener(view, ListHolderListener)
         toolbar.setTitle(R.string.profiles)
         toolbar.inflateMenu(R.menu.profile_manager_menu)
         toolbar.setOnMenuItemClickListener(this)
         ProfileManager.ensureNotEmpty()
         profilesList = view.findViewById(R.id.list)
-        profilesList.setOnApplyWindowInsetsListener(MainListListener)
+        ViewCompat.setOnApplyWindowInsetsListener(profilesList, MainListListener)
         profilesList.layoutManager = layoutManager
         profilesList.addItemDecoration(DividerItemDecoration(context, layoutManager.orientation))
         layoutManager.scrollToPosition(profilesAdapter.profiles.indexOfFirst { it.id == DataStore.profileId })
@@ -467,8 +347,9 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
         ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN,
                 ItemTouchHelper.START) {
             override fun getSwipeDirs(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int =
-                    if (isProfileEditable((viewHolder as ProfileViewHolder).item.id))
-                        super.getSwipeDirs(recyclerView, viewHolder) else 0
+                    if (isProfileEditable((viewHolder as ProfileViewHolder).item.id)) {
+                        super.getSwipeDirs(recyclerView, viewHolder)
+                    } else 0
 
             override fun getDragDirs(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int =
                     if (isEnabled) super.getDragDirs(recyclerView, viewHolder) else 0
@@ -502,7 +383,7 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
                 try {
                     val profiles = Profile.findAllUrls(
                             Core.clipboard.primaryClip!!.getItemAt(0).text,
-                            Core.currentProfile?.first
+                            Core.currentProfile?.main
                     ).toList()
                     if (profiles.isNotEmpty()) {
                         profiles.forEach { ProfileManager.createProfile(it) }
@@ -516,89 +397,66 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
                 true
             }
             R.id.action_import_file -> {
-                startFilesForResult(Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "application/*"
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/*", "text/*"))
-                }, REQUEST_IMPORT_PROFILES)
+                startFilesForResult(importProfiles)
                 true
             }
             R.id.action_replace_file -> {
-                startFilesForResult(Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "application/*"
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/*", "text/*"))
-                }, REQUEST_REPLACE_PROFILES)
+                startFilesForResult(replaceProfiles)
                 true
             }
             R.id.action_manual_settings -> {
                 startConfig(ProfileManager.createProfile(
-                        Profile().also { Core.currentProfile?.first?.copyFeatureSettingsTo(it) }))
+                        Profile().also { Core.currentProfile?.main?.copyFeatureSettingsTo(it) }))
                 true
             }
             R.id.action_export_clipboard -> {
                 val profiles = ProfileManager.getActiveProfiles()
                 val success = profiles != null && Core.trySetPrimaryClip(profiles.joinToString("\n"))
-                (activity as MainActivity).snackbar().setText(if (success)
-                    R.string.action_export_msg else R.string.action_export_err).show()
+                (activity as MainActivity).snackbar().setText(
+                        if (success) R.string.action_export_msg else R.string.action_export_err).show()
                 true
             }
             R.id.action_export_file -> {
-                startFilesForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    type = "application/json"
-                    putExtra(Intent.EXTRA_TITLE, "profiles.json")   // optional title that can be edited
-                }, REQUEST_EXPORT_PROFILES)
+                startFilesForResult(exportProfiles)
                 true
             }
             else -> false
         }
     }
 
-    private fun startFilesForResult(intent: Intent, requestCode: Int) {
+    private fun startFilesForResult(launcher: ActivityResultLauncher<String>) {
         try {
-            startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), requestCode)
-            return
+            return launcher.launch("")
         } catch (_: ActivityNotFoundException) {
         } catch (_: SecurityException) {
         }
         (activity as MainActivity).snackbar(getString(R.string.file_manager_missing)).show()
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (resultCode != Activity.RESULT_OK) super.onActivityResult(requestCode, resultCode, data)
-        else when (requestCode) {
-            REQUEST_IMPORT_PROFILES -> {
-                val activity = activity as MainActivity
-                try {
-                    ProfileManager.createProfilesFromJson(data!!.datas.asSequence().map {
-                        activity.contentResolver.openInputStream(it)
-                    }.filterNotNull())
-                } catch (e: Exception) {
-                    activity.snackbar(e.readableMessage).show()
+    private fun importOrReplaceProfiles(dataUris: List<Uri>, replace: Boolean = false) {
+        if (dataUris.isEmpty()) return
+        val activity = activity as MainActivity
+        try {
+            ProfileManager.createProfilesFromJson(dataUris.asSequence().map {
+                activity.contentResolver.openInputStream(it)
+            }.filterNotNull(), replace)
+        } catch (e: Exception) {
+            activity.snackbar(e.readableMessage).show()
+        }
+    }
+    private val importProfiles = registerForActivityResult(OpenJson()) { importOrReplaceProfiles(it) }
+    private val replaceProfiles = registerForActivityResult(OpenJson()) { importOrReplaceProfiles(it, true) }
+    private val exportProfiles = registerForActivityResult(SaveJson()) { data ->
+        if (data != null) ProfileManager.serializeToJson()?.let { profiles ->
+            val activity = activity as MainActivity
+            try {
+                activity.contentResolver.openOutputStream(data)!!.bufferedWriter().use {
+                    it.write(profiles.toString(2))
                 }
+            } catch (e: Exception) {
+                Timber.w(e)
+                activity.snackbar(e.readableMessage).show()
             }
-            REQUEST_REPLACE_PROFILES -> {
-                val activity = activity as MainActivity
-                try {
-                    ProfileManager.createProfilesFromJson(data!!.datas.asSequence().map {
-                        activity.contentResolver.openInputStream(it)
-                    }.filterNotNull(), true)
-                } catch (e: Exception) {
-                    activity.snackbar(e.readableMessage).show()
-                }
-            }
-            REQUEST_EXPORT_PROFILES -> {
-                val profiles = ProfileManager.serializeToJson()
-                if (profiles != null) try {
-                    requireContext().contentResolver.openOutputStream(data?.data!!)!!.bufferedWriter().use {
-                        it.write(profiles.toString(2))
-                    }
-                } catch (e: Exception) {
-                    Timber.w(e)
-                    (activity as MainActivity).snackbar(e.readableMessage).show()
-                }
-            }
-            else -> super.onActivityResult(requestCode, resultCode, data)
         }
     }
 
@@ -616,7 +474,6 @@ class ProfilesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener {
 
     override fun onDestroyView() {
         undoManager.flush()
-        nativeAd?.destroy()
         super.onDestroyView()
     }
 

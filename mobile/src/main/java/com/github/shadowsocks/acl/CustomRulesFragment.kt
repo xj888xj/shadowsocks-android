@@ -23,8 +23,6 @@ package com.github.shadowsocks.acl
 import android.annotation.SuppressLint
 import android.content.DialogInterface
 import android.content.Intent
-import android.content.res.Configuration
-import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
 import android.text.Editable
@@ -37,6 +35,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -55,7 +54,7 @@ import com.github.shadowsocks.widget.ListHolderListener
 import com.github.shadowsocks.widget.MainListListener
 import com.github.shadowsocks.widget.UndoSnackbarManager
 import com.google.android.material.textfield.TextInputLayout
-import kotlinx.android.parcel.Parcelize
+import kotlinx.parcelize.Parcelize
 import me.zhanghai.android.fastscroll.FastScrollerBuilder
 import timber.log.Timber
 import java.net.IDN
@@ -362,7 +361,7 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
     }
 
     private val isEnabled get() = (activity as? MainActivity)?.state == BaseService.State.Stopped ||
-            Core.currentProfile?.first?.route != Acl.CUSTOM_RULES
+            Core.currentProfile?.main?.route != Acl.CUSTOM_RULES
 
     private val selectedItems = HashSet<Any>()
     private val adapter by lazy { AclRulesAdapter() }
@@ -379,7 +378,7 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        view.setOnApplyWindowInsetsListener(ListHolderListener)
+        ViewCompat.setOnApplyWindowInsetsListener(view, ListHolderListener)
         if (savedInstanceState != null) {
             selectedItems.addAll(savedInstanceState.getStringArray(SELECTED_SUBNETS)
                     ?.mapNotNull { Subnet.fromString(it) } ?: listOf())
@@ -394,7 +393,7 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
         toolbar.setOnMenuItemClickListener(this)
         val activity = activity as MainActivity
         list = view.findViewById(R.id.list)
-        list.setOnApplyWindowInsetsListener(MainListListener)
+        ViewCompat.setOnApplyWindowInsetsListener(list, MainListListener)
         list.layoutManager = LinearLayoutManager(activity, RecyclerView.VERTICAL, false)
         list.itemAnimator = DefaultItemAnimator()
         list.adapter = adapter
@@ -436,8 +435,9 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
                 is URL -> acl.urls.add(it)
             }
         }
-        (activity as MainActivity).snackbar().setText(if (Core.trySetPrimaryClip(acl.toString()))
-            R.string.action_export_msg else R.string.action_export_err).show()
+        val success = Core.trySetPrimaryClip(acl.toString())
+        (activity as MainActivity).snackbar().setText(
+                if (success) R.string.action_export_msg else R.string.action_export_err).show()
     }
 
     override fun onMenuItemClick(item: MenuItem): Boolean = when (item.itemId) {
@@ -491,18 +491,7 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
 
     override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
         val activity = requireActivity()
-        val window = activity.window
-        // In the end material_grey_100 is used for background, see AppCompatDrawableManager (very complicated)
-        // for dark mode, it's roughly 850? (#303030)
-        window.statusBarColor = ContextCompat.getColor(activity, when {
-            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES ->
-                android.R.color.black
-            Build.VERSION.SDK_INT >= 23 -> {
-                window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                R.color.material_grey_300
-            }
-            else -> R.color.material_grey_600
-        })
+        activity.window.statusBarColor = ContextCompat.getColor(activity, android.R.color.black)
         activity.menuInflater.inflate(R.menu.custom_rules_selection, menu)
         toolbar.touchscreenBlocksFocus = true
         return true
@@ -530,10 +519,8 @@ class CustomRulesFragment : ToolbarFragment(), Toolbar.OnMenuItemClickListener, 
     }
     override fun onDestroyActionMode(mode: ActionMode) {
         val activity = requireActivity()
-        val window = activity.window
-        window.statusBarColor = ContextCompat.getColor(activity,
+        activity.window.statusBarColor = ContextCompat.getColor(activity,
                 activity.theme.resolveResourceId(android.R.attr.statusBarColor))
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
         toolbar.touchscreenBlocksFocus = false
         selectedItems.clear()
         onSelectedItemsUpdated()

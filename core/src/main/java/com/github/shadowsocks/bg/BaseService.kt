@@ -24,8 +24,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.*
-import androidx.core.content.getSystemService
+import android.os.Build
+import android.os.IBinder
+import android.os.RemoteCallbackList
+import android.os.RemoteException
 import com.github.shadowsocks.BootReceiver
 import com.github.shadowsocks.Core
 import com.github.shadowsocks.Core.app
@@ -134,7 +136,7 @@ object BaseService {
 
         private suspend fun loop() {
             while (true) {
-                delay(bandwidthListeners.values.min() ?: return)
+                delay(bandwidthListeners.values.minOrNull() ?: return)
                 val proxies = listOfNotNull(data?.proxy, data?.udpFallback)
                 val stats = proxies
                         .map { Pair(it.profile.id, it.trafficMonitor?.requestUpdate()) }
@@ -222,8 +224,8 @@ object BaseService {
         fun forceLoad() {
             val (profile, fallback) = Core.currentProfile
                     ?: return stopRunner(false, (this as Context).getString(R.string.profile_empty))
-            if (profile.host.isEmpty() || profile.password.isEmpty() ||
-                    fallback != null && (fallback.host.isEmpty() || fallback.password.isEmpty())) {
+            if (profile.host.isEmpty() || (!profile.method.equals("none") && profile.password.isEmpty()) ||
+                    fallback != null && (fallback.host.isEmpty() || (!fallback.method.equals("none") && fallback.password.isEmpty()))) {
                 stopRunner(false, (this as Context).getString(R.string.proxy_empty))
                 return
             }
@@ -238,19 +240,19 @@ object BaseService {
         val isVpnService get() = false
 
         suspend fun startProcesses() {
-            val configRoot = (if (Build.VERSION.SDK_INT < 24 || app.getSystemService<UserManager>()
-                            ?.isUserUnlocked != false) app else Core.deviceStorage).noBackupFilesDir
+            val context = if (Build.VERSION.SDK_INT < 24 || Core.user.isUserUnlocked) app else Core.deviceStorage
+            val configRoot = context.noBackupFilesDir
             val udpFallback = data.udpFallback
             data.proxy!!.start(this,
                     File(Core.deviceStorage.noBackupFilesDir, "stat_main"),
                     File(configRoot, CONFIG_FILE),
-                    if (udpFallback == null) "-U" else null)
+                    if (udpFallback == null && data.proxy?.plugin == null) "tcp_and_udp" else "tcp_only")
             if (udpFallback?.plugin != null) throw ExpectedExceptionWrapper(IllegalStateException(
                     "UDP fallback cannot have plugins"))
             udpFallback?.start(this,
                     File(Core.deviceStorage.noBackupFilesDir, "stat_udp"),
                     File(configRoot, CONFIG_FILE_UDP),
-                    "-u", false)
+                    "udp_only", false)
             data.localDns = LocalDnsWorker(this::rawResolver).apply { start() }
         }
 
@@ -321,15 +323,15 @@ object BaseService {
         fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             val data = data
             if (data.state != State.Stopped) return Service.START_NOT_STICKY
-            val profilePair = Core.currentProfile
+            val expanded = Core.currentProfile
             this as Context
-            if (profilePair == null) {
+            if (expanded == null) {
                 // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107
                 data.notification = createNotification("")
                 stopRunner(false, getString(R.string.profile_empty))
                 return Service.START_NOT_STICKY
             }
-            val (profile, fallback) = profilePair
+            val (profile, fallback) = expanded
             profile.name = profile.formattedName    // save name for later queries
             val proxy = ProxyInstance(profile)
             data.proxy = proxy
